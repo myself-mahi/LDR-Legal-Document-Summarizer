@@ -1,0 +1,10 @@
+streamlit==1.39.0
+transformers==4.45.1
+pdfplumber==0.11.0
+torch==2.4.1
+sentencepiece==0.1.99
+huggingface-hub==0.25.1
+
+
+pip install -r requirements.txt
+to run : streamlit run app.py 
