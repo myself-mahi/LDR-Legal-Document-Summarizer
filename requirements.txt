@@ -1,11 +1,6 @@
-# Core app
-streamlit==1.39.0
-
-# NLP & Transformers
-transformers==4.45.1
+streamlit==1.30.0
+transformers==4.42.2
+torch==2.2.0
 sentencepiece==0.1.97
-torch==2.9.0
-huggingface-hub==0.25.1
-
-# PDF processing
-pdfplumber==0.11.0
+pdfplumber==0.9.0
+python-dotenv==1.0.0
