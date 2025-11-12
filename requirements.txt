@@ -1,8 +1,6 @@
 streamlit==1.39.0
 transformers==4.45.1
 pdfplumber==0.11.0
-torch==2.4.1
+torch==2.9.0 
 sentencepiece==0.1.99
 huggingface-hub==0.25.1
-
-
