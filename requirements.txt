@@ -2,6 +2,8 @@ streamlit
 transformers
 torch
 pdfplumber
-python-dotenv
-rich
+pytesseract
+pdf2image
+Pillow
 sentencepiece
+protobuf

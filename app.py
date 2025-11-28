@@ -1,176 +1,163 @@
-import os
-from dotenv import load_dotenv
 import streamlit as st
+from transformers import T5Tokenizer, T5ForConditionalGeneration
 import pdfplumber
-from transformers import pipeline
-import asyncio
-import base64
+import torch
+import re
 
 
-# async loop handling
 
-try:
-    asyncio.get_running_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
+# MPS DEVICE SETUP (Optimized for M4)
 
-# Load environment variables form .env file
-load_dotenv()
+def get_device():
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    else:
+        return torch.device("cpu")
 
-# Fetch token
-load_dotenv()
-hf_token = os.getenv('HF_TOKEN')
+device = get_device()
 
-# Cache the summarizer model
+
+
+# Streamlit Config
+
+st.set_page_config(page_title="Legal Document Summarizer", page_icon="⚖️", layout="wide")
+st.title("⚖️ Legal Document Summarizer ")
+st.markdown("Upload a **legal PDF** to generate a concise summary.")
+
+
+
+# Sidebar Settings
+
+st.sidebar.title("⚙️ Settings")
+max_length = st.sidebar.slider("Max Summary Length", 150, 400, 250)
+min_length = st.sidebar.slider("Min Summary Length", 50, 200, 100)
+chunk_size = st.sidebar.slider("Chunk Size (words)", 300, 1200, 600)
+
+
+
+# Load HuggingFace Model 
+
+MODEL_NAME = "Arsomuu/Legal_T5"
 
 @st.cache_resource
-def load_summarizer():
-    return pipeline("summarization", model="facebook/bart-large-cnn", token=hf_token)
+def load_model():
+    tokenizer = T5Tokenizer.from_pretrained(MODEL_NAME)
+    model = T5ForConditionalGeneration.from_pretrained(MODEL_NAME)
 
-summarizer = load_summarizer()
+    model.to(device)   
+
+    return tokenizer, model
+
+tokenizer, model = load_model()
 
 
-# EXTRACT text from pdf 
+
+# PDF Extraction
 def extract_text_from_pdf(uploaded_file):
     text = ""
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             page_text = page.extract_text()
-            if page_text:     # <-- prevents NoneType error
+            if page_text:
                 text += page_text + "\n"
-    return text if text.strip() else "[ERROR] No text found in the pdf. Please try another File."
+    return text.strip()
 
 
-def chunk_text(text, max_length=1500):
-    chunks = []
-    for i in range(0, len(text), max_length):
-        chunks.append(text[i:i+max_length])
+
+# Chunking
+
+def chunk_text(text, max_words):
+    sentences = re.split(r'(?<=[.!?]) +', text)
+    chunks, current, count = [], [], 0
+
+    for sent in sentences:
+        words = sent.split()
+        if count + len(words) > max_words:
+            chunks.append(" ".join(current))
+            current, count = [], 0
+        current.append(sent)
+        count += len(words)
+
+    if current:
+        chunks.append(" ".join(current))
+
     return chunks
 
 
-# Web designing using html and css
 
-st. markdown(
-    """
-    <style>
-/* ---- Global Background ---- */
-    body {
-        background: linear-gradient(135deg, #e3f2fd, #ffffff);
-        font-family: 'Segoe UI', sans-serif;
-    }
+# Summarization
+def summarize_chunk(chunk, min_len, max_len):
+    encoding = tokenizer(
+        chunk,
+        return_tensors="pt",
+        truncation=True,
+        padding="max_length",
+        max_length=1024
+    ).to(device)
 
-    /* ---- Main container ---- */
-    .main {
-        background-color: #ffffff;
-        padding: 25px;
-        border-radius: 15px;
-        box-shadow: 0px 8px 25px rgba(0,0,0,0.1);
-    }
+    with torch.no_grad():
+        output = model.generate(
+            **encoding,
+            max_length=max_len,
+            min_length=min_len,
+            do_sample=False
+        )
 
-    /* ---- Title ---- */
-    h1 {
-        color: #0056D2;
-        text-align: center;
-        font-size: 40px !important;
-        font-weight: 700;
-    }
-
-    /* ---- File uploader box ---- */
-    .stFileUploader {
-        border: 2px dashed #0056D2 !important;
-        border-radius: 15px;
-        padding: 15px;
-    }
-
-    /* ---- Text box ---- */
-    .stTextArea, .stTextInput>div>input {
-        border-radius: 10px !important;
-        border: 1px solid #b9d6ff !important;
-    }
-
-    /* ---- Buttons ---- */
-    .stButton>button {
-        background-color: #0056D2;
-        color: white;
-        border-radius: 10px;
-        padding: 12px 25px;
-        font-size: 18px;
-        width: 100%;
-        transition: 0.3s;
-    }
-
-    .stButton>button:hover {
-        background-color: #003f9a;
-        transform: scale(1.03);
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# STREAMLIT UI
-
-st.markdown("""
-<div style="text-align:center; padding: 20px;">
-    <h1 style="color:#0056D2; font-size: 42px; font-weight:700;">
-         Indian Legal Document Summarizer
-    </h1>
-    <p style="font-size:18px; color:#343A40;">
-        Upload a legal document (PDF) and get a concise summary powered by AI.
-    </p>
-</div>
-""", unsafe_allow_html=True)
+    return tokenizer.decode(output[0], skip_special_tokens=True)
 
 
-uploaded_file = st.file_uploader("Drag & Drop or Browse", type=["pdf"], help="Upload A PDF file for summarization")
+def summarize_chunks(chunks, min_len, max_len):
+    all_summaries = []
+    progress = st.progress(0)
+    placeholder = st.empty()
+
+    for i, chunk in enumerate(chunks):
+
+        try:
+            summary = summarize_chunk(chunk, min_len, max_len)
+        except Exception as e:
+            summary = f"[Error in chunk {i+1}] {e}"
+
+        all_summaries.append(summary)
+
+        progress.progress((i + 1) / len(chunks))
+        placeholder.markdown(f"### Chunk {i+1}/{len(chunks)}\n{summary}\n---")
+
+    progress.empty()
+    placeholder.empty()
+    return "\n\n".join(all_summaries)
+
+
+
+# File Upload + Processing
+
+uploaded_file = st.file_uploader("📄 Upload Legal PDF", type=["pdf"])
 
 if uploaded_file:
-    with st.spinner("Extracting text from PDF...."):
-        text = extract_text_from_pdf(uploaded_file)
-    
-    if text.startswith("[ERROR]"):
-        st.error(text)
+    with st.spinner("📥 Extracting text..."):
+        full_text = extract_text_from_pdf(uploaded_file)
 
+    if not full_text:
+        st.error("❌ No readable text found. This PDF may be scanned.")
     else:
-        st.success("Text extracted successfully! Generating summary...")
+        st.success(f"Extracted {len(full_text.split())} words.")
 
-        #  Split into chunks (no variable rename)
-        chunks = chunk_text(text)
-        summary = ""  # ← keep same variable name
+        if st.button("✨ Generate Summary", use_container_width=True):
+            chunks = chunk_text(full_text, chunk_size)
 
-        with st.spinner("Summarizing..."):
-            for i, chunk in enumerate(chunks):
-                st.write(f"🔄 Summarizing section {i+1}/{len(chunks)}...")
-                part_summary = summarizer(
-                    chunk,
-                    max_length=200,
-                    min_length=80,
-                    do_sample=False
-                )[0]['summary_text']
+            with st.spinner("🤖 Summarizing using MPS on M4..."):
+                final_summary = summarize_chunks(chunks, min_length, max_length)
 
-                summary += part_summary + "\n\n"   # add to final summary
+            st.subheader("🧾 Final Summary")
+            st.write(final_summary)
 
-        st.markdown("### ✅ Summary:")
-        st.info(summary)
+            st.download_button(
+                "💾 Download Summary",
+                data=final_summary,
+                file_name="legal_summary.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
 
-
-        # ---- DOWNLOAD BUTTON ----
-        summary_bytes = summary.encode('utf-8')
-        b64 = base64.b64encode(summary_bytes).decode()
-
-        href = f"""
-        <a href="data:file/txt;base64,{b64}" 
-        download="summary.txt"
-        style="text-decoration:none;">
-            <button style="
-                background-color:#0056D2;
-                color:white;
-                padding:10px 20px;
-                border:none;
-                border-radius:8px;
-                font-size:16px;
-                cursor:pointer;">
-                📥 Download Summary
-            </button>
-        </a>
-        """
-
-        st.markdown(href, unsafe_allow_html=True)
+else:
+    st.info("👆 Upload a PDF to start.")
