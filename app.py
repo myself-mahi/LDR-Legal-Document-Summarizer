@@ -145,7 +145,7 @@ if uploaded_file:
         if st.button("✨ Generate Summary", use_container_width=True):
             chunks = chunk_text(full_text, chunk_size)
 
-            with st.spinner("🤖 Summarizing using MPS on M4..."):
+            with st.spinner("🤖 Summarizing using..."):
                 final_summary = summarize_chunks(chunks, min_length, max_length)
 
             st.subheader("🧾 Final Summary")
